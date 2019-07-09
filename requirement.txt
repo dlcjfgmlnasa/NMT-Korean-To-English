@@ -1,5 +1,9 @@
+JPype1==0.7.0
+konlpy==0.5.1
 numpy==1.16.4
 Pillow==6.0.0
+protobuf==3.8.0
 six==1.12.0
+tensorboardX==1.8
 torch==1.1.0
 torchvision==0.3.0
