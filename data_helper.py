@@ -5,50 +5,61 @@ from __future__ import division
 import os
 import re
 import time
+import torch
 import pickle
 from konlpy.tag import Okt
+from torch.utils.data import Dataset
 
 
 okt = Okt()
 
 
 class Voc(object):
-    def __init__(self, lng='ko'):
-        self.lng = lng
+    def __init__(self):
+        self.STR = '<STR>'      # start
+        self.END = '<END>'      # end
+        self.PAD = '<PAD>'      # pad
+        self.UNK = '<UNK>'      # unknown
+
         self.words = set()
         self.word2idx = {}
         self.idx2word = {}
         self.word2count = {}
+        self._add_spc_key()
 
-        if self.lng not in ['ko', 'en']:
-            raise KeyError('voc supported only [ko, en]')
+    def _add_spc_key(self):
+        spc_keys = [self.PAD, self.STR, self.END, self.UNK]
+        self.words.update(spc_keys)
+        for count, word in enumerate(spc_keys):
+            self.word2idx[word] = count
+            self.idx2word[count] = word
 
-    def split_func(self):
-        if self.lng == 'ko':
+    @staticmethod
+    def split_func(lng):
+        if lng == 'ko':
             return split_sentence_with_ko
-        elif self.lng == 'en':
+        elif lng == 'en':
             return split_sentence_with_en
 
-    def add_sentences(self, sentences):
-        start_time = time.time()
-        for sentence in sentences:
-            self.words.update(self.split_func()(sentence))
+    def add_sentences(self, sentences, lng):
+        if lng not in ['ko', 'en']:
+            raise NotImplementedError('voc supported only [ko, en]')
 
+        for sentence in sentences:
+            self.words.update(self.split_func(lng)(sentence))
             # make word2count
-            for word in self.split_func()(sentence):
+            for word in self.split_func(lng=lng)(sentence):
                 if word in self.word2count:
                     self.word2count[word] += 1
                 else:
                     self.word2count[word] = 1
 
         # make word2idx, idx2word
-        words = sorted(list(self.words))
+        words = sorted(list(self.words.difference({self.PAD, self.STR, self.END, self.UNK})))
         for i, word in enumerate(words):
+            i = i + 4
             self.word2idx[word] = i
             self.idx2word[i] = word
-
-        end_time = time.time()
-        print('load dictionary time : {:.3f}sec'.format(end_time - start_time))
 
     def trim(self, min_count=0, max_count=8000):
         trim_words = set()
@@ -62,12 +73,15 @@ class Voc(object):
         words = sorted(list(self.words))
         self.word2idx = {}
         self.idx2word = {}
+        self._add_spc_key()
         for i, word in enumerate(words):
+            i = i + 4
             self.word2idx[word] = i
             self.idx2word[i] = word
 
 
 def clean_str(string):
+    string = string.strip()
     string = re.sub('[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\‘|\(\)\[\]\<\>`\'…》]', '', string)
     return string.strip().lower()
 
@@ -84,27 +98,102 @@ def split_sentence_with_en(sentence):
     return words
 
 
-def create_or_get_voc(data_path, lng='ko', min_count=0, max_count=8000, save_path=None):
-    if lng not in ['ko', 'en']:
-        raise KeyError('voc supported only [ko, en]')
+def create_or_get_voc(ko_data_path=None, en_data_path=None, min_count=0, max_count=8000, save_path=None):
+    ko_voc_path = os.path.join(save_path, 'ko_voc.pkl')
+    en_voc_path = os.path.join(save_path, 'en_voc.pkl')
 
-    lines = open(data_path, 'r', encoding='utf-8').readlines()
-    file_path = os.path.join(save_path, lng + '.pkl')
-    if os.path.exists(file_path):
-        with open(file_path, 'rb') as f:
-            voc = pickle.load(f)
-        return voc
+    if os.path.exists(ko_voc_path) and os.path.join(en_voc_path):
+        start_time = time.time()
+        with open(ko_voc_path, 'rb') as f:
+            ko_voc = pickle.load(f)
+
+        with open(en_voc_path, 'rb') as f:
+            en_voc = pickle.load(f)
+
+        end_time = time.time()
+        print('load dictionary time : {:.3f}sec'.format(end_time - start_time))
+        return ko_voc, en_voc
     else:
-        voc = None
-        if lng == 'ko':
-            voc = Voc(lng='ko')
-        elif lng == 'en':
-            voc = Voc(lng='en')
+        ko_lines = open(ko_data_path, 'r', encoding='utf-8').readlines()
+        en_lines = open(en_data_path, 'r', encoding='utf-8').readlines()
 
-        voc.add_sentences(lines)
-        voc.trim(min_count, max_count)
+        start_time = time.time()
 
-        with open(os.path.join(save_path, lng+'.pkl'), 'wb') as f:
-            pickle.dump(voc, f, pickle.HIGHEST_PROTOCOL)
-        return voc
+        ko_voc = Voc()
+        ko_voc.add_sentences(ko_lines, lng='ko')
+        # ko_voc.trim(min_count, max_count)
 
+        en_voc = Voc()
+        en_voc.add_sentences(en_lines, lng='en')
+        # en_voc.trim(min_count, max_count)
+
+        with open(ko_voc_path, 'wb') as f:
+            pickle.dump(ko_voc, f, pickle.HIGHEST_PROTOCOL)
+
+        with open(en_voc_path, 'wb') as f:
+            pickle.dump(en_voc, f, pickle.HIGHEST_PROTOCOL)
+
+        end_time = time.time()
+        print('make dictionary time : {:.3f}sec'.format(end_time - start_time))
+        return ko_voc, en_voc
+
+
+class TranslationDataset(Dataset):
+    def __init__(self, x_path, y_path, ko_voc, en_voc, sequence_size):
+        self.x = open(x_path, 'r', encoding='utf-8').readlines()
+        self.y = open(y_path, 'r', encoding='utf-8').readlines()
+        self.ko_voc = ko_voc
+        self.en_voc = en_voc
+        self.sequence_size = sequence_size
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        encoder_input, encoder_length = self.encoder_input_to_vector(self.x[idx])
+        decoder_input = self.decoder_input_to_vector(self.y[idx])
+        decoder_output = self.decoder_output_to_vector(self.y[idx])
+
+        return encoder_input, encoder_length, decoder_input, decoder_output
+
+    def encoder_input_to_vector(self, sentence):
+        words = split_sentence_with_ko(sentence)
+        words, length = self.padding(words, self.ko_voc)
+        idx_list = self.word2idx(words, self.ko_voc)
+
+        return torch.tensor(idx_list), torch.tensor(length)
+
+    def decoder_input_to_vector(self, sentence):
+        words = split_sentence_with_en(sentence)
+        words.insert(0, self.en_voc.STR)
+        words, _ = self.padding(words, self.en_voc)
+        idx_list = self.word2idx(words, self.en_voc)
+
+        return torch.tensor(idx_list)
+
+    def decoder_output_to_vector(self, sentence):
+        words = split_sentence_with_en(sentence)
+        words.append(self.en_voc.END)
+        words, _ = self.padding(words, self.en_voc)
+        idx_list = self.word2idx(words, self.en_voc)
+
+        return torch.tensor(idx_list)
+
+    def padding(self, words, voc):
+        if len(words) < self.sequence_size:
+            length = len(words)
+            words += [voc.PAD] * (self.sequence_size - len(words))
+        else:
+            words = words[:self.sequence_size]
+            length = len(words)
+        return words, length
+
+    @staticmethod
+    def word2idx(words, voc):
+        idx_list = []
+        for word in words:
+            try:
+                idx_list.append(voc.word2idx[word])
+            except KeyError:
+                idx_list.append(voc.word2idx[voc.UNK])
+        return idx_list
