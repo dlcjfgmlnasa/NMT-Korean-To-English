@@ -14,6 +14,9 @@ from model import EncoderRNN, DecoderRNN, Seq2Seq
 from data_helper import create_or_get_voc, TranslationDataset
 
 
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', default='../Dataset', type=str)
@@ -25,7 +28,7 @@ def get_args():
     parser.add_argument('--rnn_layer', default=1, type=int)
     parser.add_argument('--batch_size', default=500, type=int)
     parser.add_argument('--epochs', default=100, type=int)
-    parser.add_argument('--model_path', default='./save_model/seq2seq.pth', type=str)
+    parser.add_argument('--model_path', default='./save_model/0_seq2seq.pth', type=str)
     args = parser.parse_args()
     return args
 
@@ -45,6 +48,9 @@ def calculation_loss(out, tar, loss_func):
     out = out.view(-1, out.size(-1))        # => (batch_size * seq_len-1, voc_size)
     tar = tar.view(-1)                      # => (batch_size * seq_len-1)
 
+    out = out.to(device)
+    tar = tar.to(device)
+
     loss_ = loss_func(out, tar)
     return loss_
 
@@ -54,8 +60,6 @@ def train():
 
     x_train_path = os.path.join(args.data_path, 'train.ko')
     y_train_path = os.path.join(args.data_path, 'train.en')
-    x_test_path = os.path.join(args.data_path, 'test.ko')
-    y_test_path = os.path.join(args.data_path, 'test.en')
     x_dev_path = os.path.join(args.data_path, 'dev.ko')
     y_dev_path = os.path.join(args.data_path, 'dev.en')
 
@@ -77,6 +81,7 @@ def train():
     encoder = EncoderRNN(ko_embedding, args.rnn_dim, args.rnn_layer)
     decoder = DecoderRNN(en_embedding, args.rnn_dim, en_word_len, args.rnn_layer)
     model = Seq2Seq(encoder, decoder)
+    model = model.to(device)
 
     model.apply(init_weights)
     optimizer = optim.Adam(model.parameters())
@@ -84,17 +89,14 @@ def train():
 
     # if exist model => load model
     if os.path.exists(args.model_path):
+        print(f'load model : {args.model_path}')
         checkpoint = torch.load(args.model_path)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     # Train data & loader
     train_data = TranslationDataset(x_train_path, y_train_path, ko_voc, en_voc, args.rnn_sequence_size)
-    train_loader = DataLoader(train_data, shuffle=True, batch_size=args.batch_size, num_workers=4)
-
-    # Test data & loader
-    test_data = TranslationDataset(x_test_path, y_test_path, ko_voc, en_voc, args.rnn_sequence_size)
-    test_loader = DataLoader(test_data, batch_size=int(test_data.__len__() / 50))
+    train_loader = DataLoader(train_data, shuffle=True, batch_size=args.batch_size, num_workers=0)
 
     # Dev data & loader
     dev_data = TranslationDataset(x_dev_path, y_dev_path, ko_voc, en_voc, args.rnn_sequence_size)
@@ -106,12 +108,11 @@ def train():
         epoch_avg_train_loss = 0
 
         for i, data in enumerate(train_loader, 0):
-            train_enc_input, train_enc_length, train_dec_input, train_dec_output = data
             # train_enc_input  => (batch_size, sequence_size)
             # train_enc_length => (batch_size)
             # train_dec_input  => (batch_size, sequence_size)
             # train_dec_output => (batch_size, sequence_size)
-
+            train_enc_input, train_enc_length, train_dec_input, train_dec_output = data
             train_enc_length, sorted_idx = train_enc_length.sort(0, descending=True)
             train_enc_input = train_enc_input[sorted_idx]
 
@@ -122,6 +123,7 @@ def train():
             loss = calculation_loss(output, train_dec_output, criterion)
 
             # optimizer
+            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
@@ -146,11 +148,11 @@ def train():
                 print('epoch : {0:2d} iter : {1:4d}  =>  train_loss : {2:4f}'.format(epoch, i, loss.item()))
 
         # save model
-        if epoch % 10 == 0:
+        if epoch % 5 == 0:
             base_path = os.path.dirname(args.model_path)
             full_path = os.path.join(base_path, str(epoch)+'_seq2seq.pth')
             torch.save({
-                'epoch': epoch,
+                'epoch': epoch+1,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': epoch_avg_train_loss / len(iter(train_loader))

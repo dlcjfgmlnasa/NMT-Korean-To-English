@@ -12,6 +12,7 @@ from torch.utils.data import Dataset
 
 
 okt = Okt()
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 class Voc(object):
@@ -161,7 +162,7 @@ class TranslationDataset(Dataset):
         words, length = self.padding(words, self.ko_voc)
         idx_list = self.word2idx(words, self.ko_voc)
 
-        return torch.tensor(idx_list), torch.tensor(length)
+        return torch.tensor(idx_list).to(device), torch.tensor(length).to(device)
 
     def decoder_input_to_vector(self, sentence):
         words = split_sentence_with_en(sentence)
@@ -169,7 +170,7 @@ class TranslationDataset(Dataset):
         words, _ = self.padding(words, self.en_voc)
         idx_list = self.word2idx(words, self.en_voc)
 
-        return torch.tensor(idx_list)
+        return torch.tensor(idx_list).to(device)
 
     def decoder_output_to_vector(self, sentence):
         words = split_sentence_with_en(sentence)
@@ -177,7 +178,7 @@ class TranslationDataset(Dataset):
         words, _ = self.padding(words, self.en_voc)
         idx_list = self.word2idx(words, self.en_voc)
 
-        return torch.tensor(idx_list)
+        return torch.tensor(idx_list).to(device)
 
     def padding(self, words, voc):
         if len(words) < self.sequence_size:
