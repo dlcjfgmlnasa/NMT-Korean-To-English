@@ -1,3 +1,6 @@
 __pycache__/
 .venv
 venv/
+
+01_Seq2Seq/runs/
+01_Seq2Seq/save_model/
