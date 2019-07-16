@@ -11,24 +11,27 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from model import EncoderRNN, DecoderRNN, Seq2Seq
-from data_helper import create_or_get_voc, TranslationDataset
+from data_helper import create_or_get_voc, create_or_get_word2vec, apply_word2vec_embedding_matrix, TranslationDataset
+from tensorboardX import SummaryWriter
 
 
+writer = SummaryWriter()
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', default='../Dataset', type=str)
+    parser.add_argument('--word2vec_path', default='../Word2Vec', type=str)
     parser.add_argument('--rnn_sequence_size', default=20, type=int)
     parser.add_argument('--min_count', default=0, type=int)
     parser.add_argument('--max_count', default=8000, type=int)
     parser.add_argument('--embedding_size', default=200, type=int)
-    parser.add_argument('--rnn_dim', default=50, type=int)
+    parser.add_argument('--rnn_dim', default=128, type=int)
     parser.add_argument('--rnn_layer', default=1, type=int)
-    parser.add_argument('--batch_size', default=500, type=int)
-    parser.add_argument('--epochs', default=100, type=int)
-    parser.add_argument('--model_path', default='./save_model/0_seq2seq.pth', type=str)
+    parser.add_argument('--batch_size', default=512, type=int)
+    parser.add_argument('--epochs', default=500, type=int)
+    parser.add_argument('--model_path', default='./save_model/45_seq2seq.pth', type=str)
     args = parser.parse_args()
     return args
 
@@ -43,10 +46,8 @@ def count_parameters(model):
 
 
 def calculation_loss(out, tar, loss_func):
-    out = out[:, :-1].contiguous()          # => (batch_size, seq_len-1, voc_size)
-    tar = tar[:, 1:].contiguous()           # => (batch_size, seq_len-1)
-    out = out.view(-1, out.size(-1))        # => (batch_size * seq_len-1, voc_size)
-    tar = tar.view(-1)                      # => (batch_size * seq_len-1)
+    out = out.view(-1, out.size(-1))        # => (batch_size * seq_len, voc_size)
+    tar = tar.view(-1)                      # => (batch_size * seq_len)
 
     out = out.to(device)
     tar = tar.to(device)
@@ -63,6 +64,7 @@ def train():
     x_dev_path = os.path.join(args.data_path, 'dev.ko')
     y_dev_path = os.path.join(args.data_path, 'dev.en')
 
+    # create or get vocabulary dictionary
     ko_voc, en_voc = create_or_get_voc(
         x_train_path,
         y_train_path,
@@ -73,18 +75,27 @@ def train():
     ko_word_len = len(ko_voc.word2idx)
     en_word_len = len(en_voc.word2idx)
 
+    ko_word2vec, en_word2vec = create_or_get_word2vec(args.word2vec_path, x_train_path, y_train_path)
+
     # embedding matrix
     ko_embedding = nn.Embedding(ko_word_len, args.embedding_size)
     en_embedding = nn.Embedding(en_word_len, args.embedding_size)
 
     # define model
-    encoder = EncoderRNN(ko_embedding, args.rnn_dim, args.rnn_layer)
+    encoder = EncoderRNN(ko_embedding, args.rnn_sequence_size, args.rnn_dim, args.rnn_layer)
     decoder = DecoderRNN(en_embedding, args.rnn_dim, en_word_len, args.rnn_layer)
     model = Seq2Seq(encoder, decoder)
+    model.train()
     model = model.to(device)
 
+    # initialize weight
     model.apply(init_weights)
-    optimizer = optim.Adam(model.parameters())
+
+    # initialize embedding matrix - apply word2vec embedding matrix
+    ko_embedding = apply_word2vec_embedding_matrix(ko_word2vec, ko_embedding, ko_voc)
+    en_embedding = apply_word2vec_embedding_matrix(en_word2vec, en_embedding, en_voc)
+
+    optimizer = optim.Adam(model.parameters(), lr=0.01)
     criterion = nn.CrossEntropyLoss(ignore_index=en_voc.word2idx[en_voc.PAD])
 
     # if exist model => load model
@@ -104,6 +115,7 @@ def train():
 
     # Training
     start_time = time.time()
+    global_step = 0
     for epoch in range(args.epochs):
         epoch_avg_train_loss = 0
 
@@ -121,6 +133,7 @@ def train():
 
             # get loss
             loss = calculation_loss(output, train_dec_output, criterion)
+            writer.add_scalar('loss', loss.item(), global_step)
 
             # optimizer
             optimizer.zero_grad()
@@ -147,19 +160,25 @@ def train():
                 epoch_avg_train_loss += loss.item()
                 print('epoch : {0:2d} iter : {1:4d}  =>  train_loss : {2:4f}'.format(epoch, i, loss.item()))
 
+            global_step += 1
+
         # save model
         if epoch % 5 == 0:
             base_path = os.path.dirname(args.model_path)
             full_path = os.path.join(base_path, str(epoch)+'_seq2seq.pth')
             torch.save({
                 'epoch': epoch+1,
+                'ko_embedding': ko_embedding.state_dict(),
+                'en_embedding': en_embedding.state_dict(),
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': epoch_avg_train_loss / len(iter(train_loader))
             }, full_path)
 
     end_time = time.time()
-    print(end_time - start_time)
+    writer.close()
+
+    print('Training ending... !! time : {}'.format(end_time - start_time))
 
 
 if __name__ == '__main__':
