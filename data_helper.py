@@ -9,6 +9,8 @@ import torch
 import pickle
 from konlpy.tag import Okt
 from torch.utils.data import Dataset
+from gensim.models import KeyedVectors
+from gensim.models import Word2Vec
 
 
 okt = Okt()
@@ -63,6 +65,7 @@ class Voc(object):
             self.idx2word[i] = word
 
     def trim(self, min_count=0, max_count=8000):
+        # TODO: min_count 와 max_count 를 하나만 입력하여도 동작이 가능하게...
         trim_words = set()
 
         for word, count in self.word2count.items():
@@ -139,6 +142,48 @@ def create_or_get_voc(ko_data_path=None, en_data_path=None, min_count=0, max_cou
         return ko_voc, en_voc
 
 
+def create_or_get_word2vec(save_path, ko_data_path=None, en_data_path=None,
+                           embedding_size=200, window_size=5,
+                           min_count=0, max_count=8000):
+    # TODO: min_count, max_count 적용해야됨
+
+    ko_word2vec_path = os.path.join(save_path, 'ko_word2vec.model')
+    en_word2vec_path = os.path.join(save_path, 'en_word2vec.model')
+
+    if not os.path.exists(ko_word2vec_path) and not os.path.exists(en_word2vec_path):
+        ko_lines = open(ko_data_path, 'r', encoding='utf-8').readlines()
+        en_lines = open(en_data_path, 'r', encoding='utf-8').readlines()
+        ko_lines = [split_sentence_with_ko(line) for line in ko_lines]
+        en_lines = [split_sentence_with_en(line) for line in en_lines]
+
+        ko_model = Word2Vec(ko_lines, size=embedding_size, window=window_size, workers=4, min_count=0)
+        en_model = Word2Vec(en_lines, size=embedding_size, window=window_size, workers=4, min_count=0)
+        ko_model.save(ko_word2vec_path)
+        en_model.save(en_word2vec_path)
+        return ko_model, en_model
+    else:
+        ko_model = KeyedVectors.load(ko_word2vec_path)
+        en_model = KeyedVectors.load(en_word2vec_path)
+        return ko_model, en_model
+
+
+def apply_word2vec_embedding_matrix(word2vec_model, embedding_matrix, voc):
+    num_embeddings = embedding_matrix.num_embeddings
+    embedding_dim = embedding_matrix.embedding_dim
+
+    word2vec_embedding_matrix = torch.zeros(num_embeddings, embedding_dim)
+    for idx, word in voc.idx2word.items():
+        if word in [voc.STR, voc.END, voc.PAD, voc.UNK]:
+            continue
+        try:
+            word_matrix = torch.from_numpy(word2vec_model.wv[word])
+            word2vec_embedding_matrix[idx] = word_matrix
+        except KeyError:
+            pass
+    embedding_matrix = embedding_matrix.from_pretrained(word2vec_embedding_matrix)
+    return embedding_matrix
+
+
 class TranslationDataset(Dataset):
     def __init__(self, x_path, y_path, ko_voc, en_voc, sequence_size):
         self.x = open(x_path, 'r', encoding='utf-8').readlines()
@@ -159,6 +204,9 @@ class TranslationDataset(Dataset):
 
     def encoder_input_to_vector(self, sentence):
         words = split_sentence_with_ko(sentence)
+        words.insert(0, self.ko_voc.STR)
+        words.append(self.ko_voc.END)
+
         words, length = self.padding(words, self.ko_voc)
         idx_list = self.word2idx(words, self.ko_voc)
 
