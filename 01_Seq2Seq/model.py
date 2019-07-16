@@ -4,13 +4,15 @@ import torch.nn as nn
 
 
 class EncoderRNN(nn.Module):
-    def __init__(self, embedding, rnn_dim, n_layer=1, dropout=0):
+    def __init__(self, embedding, seq_len, rnn_dim, n_layer=1, dropout=0):
         super(EncoderRNN, self).__init__()
         self.embedding = embedding
+        self.seq_len = seq_len
         self.rnn_dim = rnn_dim
         self.n_layers = n_layer
 
         embedding_dim = embedding.embedding_dim
+        self.bach_norm = nn.BatchNorm1d(seq_len)
         self.rnn = nn.LSTM(embedding_dim, rnn_dim, n_layer, dropout=dropout, batch_first=True)
         # nn.LSTM
         # batch_first = False : (seq_len, batch_size, dims)
@@ -20,6 +22,7 @@ class EncoderRNN(nn.Module):
         # input => (batch_size, time_step)
 
         embedded = self.embedding(inputs)               # => (batch_size, time_step, dimension)
+        embedded = self.bach_norm(embedded)             # => (batch_size, time_step, dimension)
         packed = nn.utils.rnn.pack_padded_sequence(embedded, length, batch_first=True)
         outputs, (hidden, cell) = self.rnn(packed)      # => (batch_size, time_step, rnn_dim)
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)    # => (batch_size, seq len, rnn_dims)
@@ -37,6 +40,7 @@ class DecoderRNN(nn.Module):
         self.n_layer = n_layer
 
         embedding_dim = embedding.embedding_dim
+        self.batch_norm = nn.BatchNorm1d(embedding_dim)
         self.rnn = nn.LSTM(embedding_dim, rnn_dim, n_layer, dropout=dropout, batch_first=True)
         # nn.LSTM
         # batch_first = False : (seq_len, batch_size, dims)
@@ -49,6 +53,7 @@ class DecoderRNN(nn.Module):
         # last_cell => (n_layer, batch_size, rnn_dim)
 
         embedded = self.embedding(inputs)               # => (batch_size, dimension)
+        embedded = self.batch_norm(embedded)            # => (batch_size, dimension)
         embedded = embedded.unsqueeze(1)                # => (batch_size, 1, dimension)
 
         output, (hidden, cell) = self.rnn(embedded, (last_hidden, last_cell))   # => (batch_size, 1, rnn_dim)
