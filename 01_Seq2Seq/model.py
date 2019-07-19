@@ -1,4 +1,8 @@
 # -*- coding:utf-8 -*-
+from __future__ import print_function
+from __future__ import division
+
+import random
 import torch
 import torch.nn as nn
 
@@ -13,7 +17,7 @@ class EncoderRNN(nn.Module):
 
         embedding_dim = embedding.embedding_dim
         self.bach_norm = nn.BatchNorm1d(seq_len)
-        self.rnn = nn.LSTM(embedding_dim, rnn_dim, n_layer, dropout=dropout, batch_first=True)
+        self.rnn = nn.LSTM(embedding_dim, rnn_dim, n_layer, dropout=dropout, batch_first=True, bidirectional=True)
         # nn.LSTM
         # batch_first = False : (seq_len, batch_size, dims)
         # batch_first = True  : (batch_size, seq_len, dims)
@@ -27,6 +31,10 @@ class EncoderRNN(nn.Module):
         outputs, (hidden, cell) = self.rnn(packed)      # => (batch_size, time_step, rnn_dim)
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)    # => (batch_size, seq len, rnn_dims)
         del outputs
+
+        # bidirectional rnn - hidden/cell concat
+        hidden = hidden[:1] + hidden[1:]
+        cell = cell[:1] + cell[1:]
 
         return hidden, cell
 
@@ -68,9 +76,11 @@ class Seq2Seq(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
 
-    def forward(self, src_input, src_length, trg_input):
-        # src_input => (batch_size, dimension)
-        # trg_input => (batch_size, dimension)
+    def forward(self, src_input, src_length, trg_input, teacher_forcing_ratio=0.5):
+        # src_input => (batch_size, seq_len)
+        # trg_input => (batch_size, seq_len)
+        # teacher_forcing_ratio is probability to use teacher forcing_rate
+        # e.g. if teacher_forcing_ratio is 0.75 we use ground-truth inputs 75% of the time
         hidden, cell = self.encoder(src_input, src_length)
 
         batch_size = trg_input.shape[0]
@@ -78,13 +88,14 @@ class Seq2Seq(nn.Module):
         trg_vocab_size = self.decoder.out_dim
 
         outputs = torch.zeros(batch_size, max_len, trg_vocab_size)  # => (batch_size, seq_len, voc_size)
-        input_ = trg_input[:, 0]                        # => (batch_size)
+        input_ = trg_input[:, 0]                                    # => (batch_size)
 
         for t in range(1, max_len):
             predication, hidden, cell = self.decoder(input_, hidden, cell)
             outputs[:, t] = predication
             values, indices = predication.max(dim=1)
             del values
-            input_ = indices
+            # apply teacher forcing ratio
+            input_ = trg_input[:, t] if random.random() < teacher_forcing_ratio else indices
 
-        return outputs                                  # => (batch_size, seq_len, voc_size)
+        return outputs                                              # => (batch_size, seq_len, voc_size)

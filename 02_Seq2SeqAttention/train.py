@@ -23,9 +23,9 @@ def get_args():
     parser.add_argument('--min_count', default=0, type=int)
     parser.add_argument('--max_count', default=8000, type=int)
     parser.add_argument('--embedding_size', default=200, type=int)
-    parser.add_argument('--rnn_dim', default=50, type=int)
+    parser.add_argument('--rnn_dim', default=128, type=int)
     parser.add_argument('--rnn_layer', default=1, type=int)
-    parser.add_argument('--attention_method', default='concat', type=str)
+    parser.add_argument('--attention_method', default='general', choices=['dot', 'general', 'concat'], type=str)
     parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--epochs', default=500, type=int)
     parser.add_argument('--model_path', default='./save_model/0_seq2seq.pth', type=str)
@@ -53,6 +53,20 @@ def calculation_loss(out, tar, loss_func):
     return loss_
 
 
+def calculation_accuracy(out, tar):
+    _, indices = out.max(dim=2)
+    indices = indices.to(device)
+    tar = tar.to(device)
+
+    equal = indices.eq(tar)
+    total = 1
+    for i in equal.size():
+        total *= i
+
+    accuracy = torch.div(equal.sum().to(dtype=torch.float32), total)
+    return accuracy
+
+
 def train():
     args = get_args()
     x_train_path = os.path.join(args.data_path, 'train.ko')
@@ -78,20 +92,19 @@ def train():
     ko_embedding = nn.Embedding(ko_word_len, args.embedding_size)
     en_embedding = nn.Embedding(en_word_len, args.embedding_size)
 
+    # initialize embedding matrix - apply word2vec embedding matrix
+    ko_embedding = apply_word2vec_embedding_matrix(ko_word2vec, ko_embedding, ko_voc)
+    en_embedding = apply_word2vec_embedding_matrix(en_word2vec, en_embedding, en_voc)
+
     # define model
     encoder = EncoderRNN(ko_embedding, args.rnn_sequence_size, args.rnn_dim, args.rnn_layer)
     attention = Attention(args.attention_method, args.rnn_dim)
     decoder = DecoderAttentionRNN(attention, en_embedding, args.rnn_dim, en_word_len, args.rnn_layer)
     model = Seq2SeqAttention(encoder, decoder)
-    model.train()
     model.to(device)
+    model.train()
 
-    # initialize weight
-    model.apply(init_weights)
-
-    # initialize embedding matrix - apply word2vec embedding matrix
-    ko_embedding = apply_word2vec_embedding_matrix(ko_word2vec, ko_embedding, ko_voc)
-    en_embedding = apply_word2vec_embedding_matrix(en_word2vec, en_embedding, en_voc)
+    print(f'The model has {count_parameters(model):,} trainable parameters')
 
     optimizer = optim.Adam(model.parameters(), lr=0.01)
     criterion = nn.CrossEntropyLoss(ignore_index=en_voc.word2idx[en_voc.PAD])
@@ -105,11 +118,13 @@ def train():
 
     # load train data & loader
     train_data = TranslationDataset(x_train_path, y_train_path, ko_voc, en_voc, args.rnn_sequence_size)
-    train_loader = DataLoader(train_data, shuffle=True, batch_size=20)
+    # train_loader = DataLoader(train_data, shuffle=True, batch_size=args.batch_size)
+    train_loader = DataLoader(train_data, shuffle=True, batch_size=1)
 
     # load dev data & loader
     dev_data = TranslationDataset(x_dev_path, y_dev_path, ko_voc, en_voc, args.rnn_sequence_size)
-    dev_loader = DataLoader(dev_data, shuffle=True, batch_size=int(dev_data.__len__() / 50))
+    # dev_loader = DataLoader(dev_data, shuffle=True, batch_size=int(dev_data.__len__() / 50))
+    dev_loader = DataLoader(dev_data, shuffle=True, batch_size=1)
 
     # Training
     start_time = time.time()
@@ -129,9 +144,12 @@ def train():
             # nn forward
             output = model(train_enc_input, train_enc_length, train_dec_input)
 
-            # get loss
+            # get loss & accuracy
             loss = calculation_loss(output, train_dec_output, criterion)
+            accuracy = calculation_accuracy(output, train_dec_input)
+
             writer.add_scalar('loss', loss.item(), global_step)
+            writer.add_scalar('accuracy', accuracy.item(), global_step)
 
             optimizer.zero_grad()
             loss.backward()
@@ -140,22 +158,29 @@ def train():
             # Dev data loss calculation
             if i % 50 == 0 and i != 0:
                 dev_avg_loss = 0
+                dev_accuracy = 0
                 count = 0
+
                 for dev_enc_input, dev_enc_length, dev_dec_input, dev_dec_output in dev_loader:
                     dev_enc_length, sorted_idx = dev_enc_length.sort(0, descending=True)
                     dev_enc_input = dev_enc_input[sorted_idx]
 
                     dev_output = model(dev_enc_input, dev_enc_length, dev_dec_input)
                     dev_loss = calculation_loss(dev_output, dev_dec_output, criterion)
+                    dev_accuracy = calculation_accuracy(dev_output, dev_dec_output)
+
                     dev_avg_loss += dev_loss.item()
+                    dev_accuracy += dev_accuracy.item()
                     count += 1
 
                 dev_avg_loss = dev_avg_loss / count
-                print('epoch : {0:2d} iter : {1:4d}  =>  train_loss : {2:4f}  dev_loss : {3:4f}'.format(
-                    epoch, i, loss.item(), dev_avg_loss))
+                dev_accuracy = dev_accuracy / count
+                print('epoch : {0:2d} iter : {1:4d}  =>  train_loss : {2:4f}  dev_loss : {3:4f}  dev_accuracy: {4:4f}'.
+                      format(epoch, i, loss.item(), dev_avg_loss, dev_accuracy))
             else:
                 epoch_avg_train_loss += loss.item()
-                print('epoch : {0:2d} iter : {1:4d}  =>  train_loss : {2:4f}'.format(epoch, i, loss.item()))
+                print('epoch : {0:2d} iter : {1:4d}  =>  train_loss : {2:4f}  accuracy : {3:4f}'.
+                      format(epoch, i, loss.item(), accuracy.item()))
 
             global_step += 1
 
