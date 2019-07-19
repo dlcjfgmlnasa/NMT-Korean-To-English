@@ -123,7 +123,7 @@ class Seq2Seq(nn.Module):
 - epoch : 500
 - 구현 코드
 
-```
+```python
 # -*- coding:utf-8 -*-
 import random
 import torch
