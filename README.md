@@ -22,31 +22,25 @@ pip install -r requirement.txt
 5. [SliceNet](#5.-SliceNet)
 6. [Transformer](#6.-Transformer)
 
----
 
 ## 1. Seq2Seq
 - 구현 완료 (2019.7.10)
 - 테스트 진행중
 
----
 
 ## 2. Seq2Seq with Attention
 - 구현 완료 (2019.7.15)
 - 테스트 진행중
 
----
 
 ## 3. Convolution Seq2Seq
 - 진행중... 
 
----
 
 ## 4. ByteNet
 
----
 
 ## 5. SliceNet
 
----
 
 ## 6. Transformer
