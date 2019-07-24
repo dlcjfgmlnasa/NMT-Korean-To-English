@@ -97,10 +97,12 @@ def translation():
         translation_values = [en_voc.idx2word[int(idx)] for idx in indices]
         print(target_value)
         print(translation_values)
+        break
 
 
 def evaluation():
     pass
 
 
-translation()
+# translation()
+

@@ -23,9 +23,9 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', default='../Dataset', type=str)
     parser.add_argument('--word2vec_path', default='../Word2Vec', type=str)
-    parser.add_argument('--rnn_sequence_size', default=20, type=int)
-    parser.add_argument('--min_count', default=0, type=int)
-    parser.add_argument('--max_count', default=8000, type=int)
+    parser.add_argument('--rnn_sequence_size', default=30, type=int)
+    parser.add_argument('--min_count', default=3, type=int)
+    parser.add_argument('--max_count', default=10000, type=int)
     parser.add_argument('--embedding_size', default=200, type=int)
     parser.add_argument('--rnn_dim', default=128, type=int)
     parser.add_argument('--rnn_layer', default=1, type=int)
@@ -89,7 +89,13 @@ def train():
     ko_word_len = len(ko_voc.word2idx)
     en_word_len = len(en_voc.word2idx)
 
-    ko_word2vec, en_word2vec = create_or_get_word2vec(args.word2vec_path, x_train_path, y_train_path)
+    ko_word2vec, en_word2vec = create_or_get_word2vec(
+        args.word2vec_path,
+        x_train_path,
+        y_train_path,
+        min_count=args.min_count,
+        max_count=args.max_count
+    )
 
     # embedding matrix
     ko_embedding = nn.Embedding(ko_word_len, args.embedding_size)
