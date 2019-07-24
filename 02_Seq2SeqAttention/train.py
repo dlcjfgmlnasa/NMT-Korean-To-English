@@ -5,6 +5,7 @@ import torch
 import argparse
 import torch.nn as nn
 import torch.optim as optim
+from eval import translation
 from torch.utils.data import DataLoader
 from data_helper import TranslationDataset, create_or_get_voc, create_or_get_word2vec, apply_word2vec_embedding_matrix
 from model import EncoderRNN, Attention, DecoderAttentionRNN, Seq2SeqAttention
@@ -19,14 +20,14 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', default='../Dataset', type=str)
     parser.add_argument('--word2vec_path', default='../Word2Vec', type=str)
-    parser.add_argument('--rnn_sequence_size', default=20, type=int)
-    parser.add_argument('--min_count', default=0, type=int)
-    parser.add_argument('--max_count', default=8000, type=int)
+    parser.add_argument('--rnn_sequence_size', default=30, type=int)
+    parser.add_argument('--min_count', default=3, type=int)
+    parser.add_argument('--max_count', default=100000, type=int)
     parser.add_argument('--embedding_size', default=200, type=int)
     parser.add_argument('--rnn_dim', default=128, type=int)
     parser.add_argument('--rnn_layer', default=1, type=int)
     parser.add_argument('--attention_method', default='general', choices=['dot', 'general', 'concat'], type=str)
-    parser.add_argument('--batch_size', default=512, type=int)
+    parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--epochs', default=500, type=int)
     parser.add_argument('--model_path', default='./save_model/0_seq2seq.pth', type=str)
     args = parser.parse_args()
@@ -86,8 +87,13 @@ def train():
     en_word_len = len(en_voc.word2idx)
 
     # create or load word2vec model
-    ko_word2vec, en_word2vec = create_or_get_word2vec(args.word2vec_path, x_train_path, y_train_path)
-
+    ko_word2vec, en_word2vec = create_or_get_word2vec(
+        args.word2vec_path,
+        x_train_path,
+        y_train_path,
+        min_count=args.min_count,
+        max_count=args.max_count
+    )
     # embedding matrix
     ko_embedding = nn.Embedding(ko_word_len, args.embedding_size)
     en_embedding = nn.Embedding(en_word_len, args.embedding_size)
@@ -118,13 +124,11 @@ def train():
 
     # load train data & loader
     train_data = TranslationDataset(x_train_path, y_train_path, ko_voc, en_voc, args.rnn_sequence_size)
-    # train_loader = DataLoader(train_data, shuffle=True, batch_size=args.batch_size)
-    train_loader = DataLoader(train_data, shuffle=True, batch_size=1)
+    train_loader = DataLoader(train_data, shuffle=True, batch_size=args.batch_size)
 
     # load dev data & loader
     dev_data = TranslationDataset(x_dev_path, y_dev_path, ko_voc, en_voc, args.rnn_sequence_size)
-    # dev_loader = DataLoader(dev_data, shuffle=True, batch_size=int(dev_data.__len__() / 50))
-    dev_loader = DataLoader(dev_data, shuffle=True, batch_size=1)
+    dev_loader = DataLoader(dev_data, batch_size=int(dev_data.__len__() / 50))
 
     # Training
     start_time = time.time()
@@ -137,12 +141,15 @@ def train():
             # train_enc_length => (batch_size)
             # train_dec_input  => (batch_size, sequence_size)
             # train_dec_output => (batch_size, sequence_size)
-            train_enc_input, train_enc_length, train_dec_input, train_dec_output = data
-            train_enc_length, sorted_idx = train_enc_length.sort(0, descending=True)
-            train_enc_input = train_enc_input[sorted_idx]
+            try:
+                train_enc_input, train_enc_length, train_dec_input, train_dec_output = data
+                train_enc_length, sorted_idx = train_enc_length.sort(0, descending=True)
+                train_enc_input = train_enc_input[sorted_idx]
 
-            # nn forward
-            output = model(train_enc_input, train_enc_length, train_dec_input)
+                # nn forward
+                output, _ = model(train_enc_input, train_enc_length, train_dec_input)
+            except RuntimeError:
+                continue
 
             # get loss & accuracy
             loss = calculation_loss(output, train_dec_output, criterion)
@@ -155,8 +162,9 @@ def train():
             loss.backward()
             optimizer.step()
 
-            # Dev data loss calculation
-            if i % 50 == 0 and i != 0:
+            # Dev data loss calculation & plot attention graph
+            if i % 50 == 0:
+                # Dev data loss calculation
                 dev_avg_loss = 0
                 dev_accuracy = 0
                 count = 0
@@ -164,8 +172,8 @@ def train():
                 for dev_enc_input, dev_enc_length, dev_dec_input, dev_dec_output in dev_loader:
                     dev_enc_length, sorted_idx = dev_enc_length.sort(0, descending=True)
                     dev_enc_input = dev_enc_input[sorted_idx]
+                    dev_output, _ = model(dev_enc_input, dev_enc_length, dev_dec_input)
 
-                    dev_output = model(dev_enc_input, dev_enc_length, dev_dec_input)
                     dev_loss = calculation_loss(dev_output, dev_dec_output, criterion)
                     dev_accuracy = calculation_accuracy(dev_output, dev_dec_output)
 
@@ -179,9 +187,8 @@ def train():
                       format(epoch, i, loss.item(), dev_avg_loss, dev_accuracy))
             else:
                 epoch_avg_train_loss += loss.item()
-                print('epoch : {0:2d} iter : {1:4d}  =>  train_loss : {2:4f}  accuracy : {3:4f}'.
-                      format(epoch, i, loss.item(), accuracy.item()))
-
+                print('epoch : {0:2d} iter : {1:4d}  =>  train_loss : {2:4f}  accuracy : {3:4f}'
+                      .format(epoch, i, loss.item(), accuracy.item()))
             global_step += 1
 
         # save model
@@ -196,7 +203,6 @@ def train():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'loss': epoch_avg_train_loss / len(iter(train_loader))
             }, full_path)
-
     end_time = time.time()
     writer.close()
 

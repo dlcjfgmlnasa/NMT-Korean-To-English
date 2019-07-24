@@ -65,7 +65,7 @@ class DecoderAttentionRNN(nn.Module):
         dec_output = dec_output.squeeze(dim=1)                              # => (batch_size, rnn_dim)
         concat = torch.cat((dec_output, context_vector), dim=1)             # => (batch_size, rnn_dim * 2)
         predication = self.linear(concat)                                   # => (batch_size, out_dim)
-        return predication, dec_hidden, dec_cell
+        return (predication, dec_hidden, dec_cell), attention_distribution
 
 
 class Seq2SeqAttention(nn.Module):
@@ -80,17 +80,22 @@ class Seq2SeqAttention(nn.Module):
         batch_size, max_len = tar_input.shape
         out_dim = self.decoder.out_dim
         outputs = torch.zeros((batch_size, max_len, out_dim))
+        attention_weight_list = []
 
         input_ = tar_input[:, 0]
 
         for t in range(1, max_len):
-            predication, hidden, cell = self.decoder(enc_output, input_, hidden, cell)
+            (predication, hidden, cell), attention_weight = self.decoder(enc_output, input_, hidden, cell)
+            # attention_weight => (batch_size, seq_len, 1)
+            attention_weight = attention_weight.squeeze(dim=2)
+            attention_weight_list.append(attention_weight)
             outputs[:, t] = predication
             values, indices = predication.max(dim=1)
             del values
             input_ = (tar_input[:, t] if random.random() < teacher_forcing_rate else indices)
 
-        return outputs
+        attention_weights = torch.stack(attention_weight_list, dim=2)   # attention
+        return outputs, attention_weights
 
 
 class Attention(nn.Module):
