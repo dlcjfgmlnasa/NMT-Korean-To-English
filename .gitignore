@@ -1,5 +1,6 @@
 __pycache__/
 .idea/
+.vscode/
 .venv
 venv/
 
@@ -7,3 +8,5 @@ venv/
 01_Seq2Seq/save_model/
 02_Seq2SeqAttention/runs/
 02_Seq2SeqAttention/save_model/
+03_ConvSeq2Seq/runs/
+03_ConvSeq2Seq/save_model/
