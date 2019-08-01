@@ -3,10 +3,7 @@ from __future__ import print_function
 from __future__ import division
 
 import os
-import sys
-
-sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
-
+import sys; sys.path.append('..')
 import argparse
 import time
 import torch
@@ -24,8 +21,8 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', default='..\\Dataset', type=str)
-    parser.add_argument('--word2vec_path', default='..\\Word2Vec', type=str)
+    parser.add_argument('--data_path', default='../Dataset', type=str)
+    parser.add_argument('--word2vec_path', default='../Word2Vec', type=str)
     parser.add_argument('--rnn_sequence_size', default=30, type=int)
     parser.add_argument('--min_count', default=3, type=int)
     parser.add_argument('--max_count', default=10000, type=int)

@@ -1,11 +1,11 @@
 # -*- coding:utf-8 -*-
 import os
+import sys; sys.path.append('../')
 import time
 import torch
 import argparse
 import torch.nn as nn
 import torch.optim as optim
-from eval import translation
 from torch.utils.data import DataLoader
 from data_helper import TranslationDataset, create_or_get_voc, create_or_get_word2vec, apply_word2vec_embedding_matrix
 from model import EncoderRNN, Attention, DecoderAttentionRNN, Seq2SeqAttention
