@@ -7,6 +7,7 @@ import re
 import time
 import torch
 import pickle
+from abc import *
 from konlpy.tag import Okt
 from torch.utils.data import Dataset
 from gensim.models import KeyedVectors
@@ -181,8 +182,8 @@ def apply_word2vec_embedding_matrix(word2vec_model, embedding_matrix, voc):
     return embedding_matrix
 
 
-class TranslationDataset(Dataset):
-    # for Seq2Seq model & Seq2Seq attention model
+class TranslationDataset(Dataset, metaclass=ABCMeta):
+    # Translation Dataset abstract class
     def __init__(self, x_path, y_path, ko_voc, en_voc, sequence_size):
         self.x = open(x_path, 'r', encoding='utf-8').readlines()
         self.y = open(y_path, 'r', encoding='utf-8').readlines()
@@ -191,7 +192,32 @@ class TranslationDataset(Dataset):
         self.sequence_size = sequence_size
 
     def __len__(self):
+        if len(self.x) != len(self.y):
+            raise IndexError('not equal x_path, y_path line size')
         return len(self.x)
+
+    @abstractmethod
+    def encoder_input_to_vector(self, sentence: str): pass
+    @abstractmethod
+    def decoder_input_to_vector(self, sentence: str): pass
+    @abstractmethod
+    def decoder_output_to_vector(self, sentence: str): pass
+
+    @staticmethod
+    def word2idx(words, voc):
+        idx_list = []
+        for word in words:
+            try:
+                idx_list.append(voc.word2idx[word])
+            except KeyError:
+                idx_list.append(voc.word2idx[voc.UNK])
+        return idx_list
+
+
+class RNNSeq2SeqDataset(TranslationDataset):
+    # for Seq2Seq model & Seq2Seq attention model
+    def __init__(self, x_path, y_path, ko_voc, en_voc, sequence_size):
+        super().__init__(x_path, y_path, ko_voc, en_voc, sequence_size)
 
     def __getitem__(self, idx):
         encoder_input, encoder_length = self.encoder_input_to_vector(self.x[idx])
@@ -232,12 +258,48 @@ class TranslationDataset(Dataset):
             length = len(words)
         return words, length
 
-    @staticmethod
-    def word2idx(words, voc):
-        idx_list = []
-        for word in words:
-            try:
-                idx_list.append(voc.word2idx[word])
-            except KeyError:
-                idx_list.append(voc.word2idx[voc.UNK])
-        return idx_list
+
+class ConvSeq2SeqDataset(TranslationDataset):
+    # for Convolution Seq2Seq model
+    def __init__(self, x_path, y_path, ko_voc, en_voc, sequence_size):
+        super().__init__(x_path, y_path, ko_voc, en_voc, sequence_size)
+
+    def __getitem__(self, idx):
+        encoder_input = self.encoder_input_to_vector(self.x[idx])
+        decoder_input = self.decoder_input_to_vector(self.y[idx])
+        decoder_output = self.decoder_output_to_vector(self.y[idx])
+        return encoder_input, decoder_input, decoder_output
+
+    def encoder_input_to_vector(self, sentence: str) -> torch.Tensor:
+        words = split_sentence_with_ko(sentence)
+        length = self.sequence_size - 2
+
+        if len(words) < length:
+            words = [self.ko_voc.STR] + words + [self.ko_voc.END]
+            words = words + [self.ko_voc.PAD for _ in range(self.sequence_size - len(words))]
+        else:
+            words = [self.ko_voc.STR] + words[:length] + [self.ko_voc.END]
+        idx_list = self.word2idx(words, self.ko_voc)
+        return torch.tensor(idx_list).to(device)
+
+    def decoder_input_to_vector(self, sentence: str) -> torch.Tensor:
+        words = split_sentence_with_en(sentence)
+        words.insert(0, self.en_voc.STR)
+
+        if len(words) < self.sequence_size:
+            words = words + [self.en_voc.PAD for _ in range(self.sequence_size - len(words))]
+        else:
+            words = words[:self.sequence_size]
+        idx_list = self.word2idx(words, self.en_voc)
+        return torch.tensor(idx_list).to(device)
+
+    def decoder_output_to_vector(self, sentence: str) -> torch.Tensor:
+        words = split_sentence_with_en(sentence)
+        words.append(self.en_voc.END)
+
+        if len(words) < self.sequence_size:
+            words = words + [self.en_voc.PAD for _ in range(self.sequence_size - len(words))]
+        else:
+            words = words[:self.sequence_size]
+        idx_list = self.word2idx(words, self.en_voc)
+        return torch.tensor(idx_list).to(device)
