@@ -2,16 +2,19 @@
 from __future__ import print_function
 from __future__ import division
 
-
 import os
-import time
+import sys
+
+sys.path.append(os.path.dirname(os.path.abspath(os.path.dirname(__file__))))
+
 import argparse
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from model import EncoderRNN, DecoderRNN, Seq2Seq
-from data_helper import create_or_get_voc, create_or_get_word2vec, apply_word2vec_embedding_matrix, TranslationDataset
+from data_helper import create_or_get_voc, create_or_get_word2vec, apply_word2vec_embedding_matrix, RNNSeq2SeqDataset
 from tensorboardX import SummaryWriter
 
 
@@ -21,8 +24,8 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', default='../Dataset', type=str)
-    parser.add_argument('--word2vec_path', default='../Word2Vec', type=str)
+    parser.add_argument('--data_path', default='..\\Dataset', type=str)
+    parser.add_argument('--word2vec_path', default='..\\Word2Vec', type=str)
     parser.add_argument('--rnn_sequence_size', default=30, type=int)
     parser.add_argument('--min_count', default=3, type=int)
     parser.add_argument('--max_count', default=10000, type=int)
@@ -32,8 +35,7 @@ def get_args():
     parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--epochs', default=500, type=int)
     parser.add_argument('--model_path', default='./save_model/45_seq2seq.pth', type=str)
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
 def init_weights(m):
@@ -125,11 +127,11 @@ def train():
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     # Train data & loader
-    train_data = TranslationDataset(x_train_path, y_train_path, ko_voc, en_voc, args.rnn_sequence_size)
+    train_data = RNNSeq2SeqDataset(x_train_path, y_train_path, ko_voc, en_voc, args.rnn_sequence_size)
     train_loader = DataLoader(train_data, shuffle=True, batch_size=args.batch_size, num_workers=0)
 
     # Dev data & loader
-    dev_data = TranslationDataset(x_dev_path, y_dev_path, ko_voc, en_voc, args.rnn_sequence_size)
+    dev_data = RNNSeq2SeqDataset(x_dev_path, y_dev_path, ko_voc, en_voc, args.rnn_sequence_size)
     dev_loader = DataLoader(dev_data, batch_size=int(dev_data.__len__() / 50))
 
     # Training
