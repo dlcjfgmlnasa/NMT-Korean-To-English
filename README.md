@@ -3,11 +3,15 @@
 작성중...
 
 - 한영 기계 번역(Korean-English Machine Translation) 모델 개발 스터디 
-- `PyTorch`, `koNLPY`, `NLPY` package 활용 
+- `PyTorch`, `koNLPY`, `NLPY`, `Gensim` package 활용 
 
 ## Requirements
+
 - Python 3.6 (may work with other versions, but I used 3.6)
-- PyTorch 1.0 or greater
+- PyTorch 1.1.0
+- Gensim 3.8.0
+- konlpy 0.5.1
+- nltk 3.4.4
 
 ## Datasets
 - https://github.com/jungyeul/korean-parallel-corpora 데이터셋 사용
@@ -55,4 +59,5 @@ pip install -r requirement.txt
 
 ## Reference
 - https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html
+- https://github.com/bentrevett/pytorch-seq2seq
 - https://wikidocs.net/24996
