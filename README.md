@@ -52,7 +52,7 @@ parser.add_argument('--batch_size', default=128, type=int)
 
 - loss
 
-![Seq2Seq Loss function](./img/Seq2Seq_Loss_Graph.png)
+![Seq2Seq Loss function](https://github.com/dlcjfgmlnasa/NMT-Koean-To-English/blob/master/img/Seq2Seq_Loss_Graph.PNG?raw=true)
 
 - translation
 
