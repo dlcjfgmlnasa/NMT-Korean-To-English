@@ -16,7 +16,6 @@ class EncoderRNN(nn.Module):
         self.n_layers = n_layer
 
         embedding_dim = embedding.embedding_dim
-        self.bach_norm = nn.BatchNorm1d(seq_len)
         self.rnn = nn.LSTM(embedding_dim, rnn_dim, n_layer, dropout=dropout, batch_first=True, bidirectional=True)
         # nn.LSTM
         # batch_first = False : (seq_len, batch_size, dims)
@@ -26,15 +25,14 @@ class EncoderRNN(nn.Module):
         # input => (batch_size, time_step)
 
         embedded = self.embedding(inputs)               # => (batch_size, time_step, dimension)
-        embedded = self.bach_norm(embedded)             # => (batch_size, time_step, dimension)
         packed = nn.utils.rnn.pack_padded_sequence(embedded, length, batch_first=True)
         outputs, (hidden, cell) = self.rnn(packed)      # => (batch_size, time_step, rnn_dim)
         outputs, _ = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)    # => (batch_size, seq len, rnn_dims)
         del outputs
 
         # bidirectional rnn - hidden/cell concat
-        hidden = hidden[:1] + hidden[1:]
-        cell = cell[:1] + cell[1:]
+        hidden = hidden[:self.n_layers] + hidden[self.n_layers:]
+        cell = cell[:self.n_layers] + cell[self.n_layers:]
 
         return hidden, cell
 
@@ -48,7 +46,6 @@ class DecoderRNN(nn.Module):
         self.n_layer = n_layer
 
         embedding_dim = embedding.embedding_dim
-        self.batch_norm = nn.BatchNorm1d(embedding_dim)
         self.rnn = nn.LSTM(embedding_dim, rnn_dim, n_layer, dropout=dropout, batch_first=True)
         # nn.LSTM
         # batch_first = False : (seq_len, batch_size, dims)
@@ -61,7 +58,6 @@ class DecoderRNN(nn.Module):
         # last_cell => (n_layer, batch_size, rnn_dim)
 
         embedded = self.embedding(inputs)               # => (batch_size, dimension)
-        embedded = self.batch_norm(embedded)            # => (batch_size, dimension)
         embedded = embedded.unsqueeze(1)                # => (batch_size, 1, dimension)
 
         output, (hidden, cell) = self.rnn(embedded, (last_hidden, last_cell))   # => (batch_size, 1, rnn_dim)
@@ -82,6 +78,8 @@ class Seq2Seq(nn.Module):
         # teacher_forcing_ratio is probability to use teacher forcing_rate
         # e.g. if teacher_forcing_ratio is 0.75 we use ground-truth inputs 75% of the time
         hidden, cell = self.encoder(src_input, src_length)
+        # print(hidden.shape)
+        # print(cell.shape)
 
         batch_size = trg_input.shape[0]
         max_len = trg_input.shape[1]

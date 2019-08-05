@@ -9,6 +9,7 @@ import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import numpy as np
 from torch.utils.data import DataLoader
 from model import EncoderRNN, DecoderRNN, Seq2Seq
 from data_helper import create_or_get_voc, create_or_get_word2vec, apply_word2vec_embedding_matrix, RNNSeq2SeqDataset
@@ -27,9 +28,9 @@ def get_args():
     parser.add_argument('--min_count', default=3, type=int)
     parser.add_argument('--max_count', default=10000, type=int)
     parser.add_argument('--embedding_size', default=200, type=int)
-    parser.add_argument('--rnn_dim', default=128, type=int)
-    parser.add_argument('--rnn_layer', default=1, type=int)
-    parser.add_argument('--batch_size', default=512, type=int)
+    parser.add_argument('--rnn_dim', default=200, type=int)
+    parser.add_argument('--rnn_layer', default=3, type=int)
+    parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--epochs', default=500, type=int)
     parser.add_argument('--model_path', default='./save_model/45_seq2seq.pth', type=str)
     return parser.parse_args()
@@ -67,6 +68,10 @@ def calculation_accuracy(out, tar):
 
     accuracy = torch.div(equal.sum().to(dtype=torch.float32), total)
     return accuracy
+
+
+def get_teacher_forcing_ratios(total_learning_step):
+    return np.linspace(0.0, 1.0, num=total_learning_step)[::-1]
 
 
 def train():
@@ -131,6 +136,10 @@ def train():
     dev_data = RNNSeq2SeqDataset(x_dev_path, y_dev_path, ko_voc, en_voc, args.rnn_sequence_size)
     dev_loader = DataLoader(dev_data, batch_size=int(dev_data.__len__() / 50))
 
+    # scheduled sampling (with linear function)
+    total_learning_step = args.epochs * len(iter(train_loader))
+    teacher_forcing_ratio_list = get_teacher_forcing_ratios(total_learning_step)
+
     # Training
     start_time = time.time()
     global_step = 0
@@ -147,7 +156,12 @@ def train():
             train_enc_input = train_enc_input[sorted_idx]
 
             # nn forward
-            output = model(train_enc_input, train_enc_length, train_dec_input)  # => (batch_size, seq_len, voc_size)
+            # output => (batch_size, seq_len, voc_size)
+            try:
+                output = model(train_enc_input, train_enc_length, train_dec_input,
+                               teacher_forcing_ratio=teacher_forcing_ratio_list[global_step])
+            except RuntimeError:
+                continue
 
             # get loss / accuracy
             loss = calculation_loss(output, train_dec_output, criterion)

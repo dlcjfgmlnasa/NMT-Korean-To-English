@@ -7,7 +7,7 @@ import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from data_helper import create_or_get_voc, TranslationDataset
+from data_helper import create_or_get_voc, RNNSeq2SeqDataset
 from model import EncoderRNN, DecoderRNN, Seq2Seq
 
 
@@ -18,11 +18,11 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', default='../Dataset', type=str)
     parser.add_argument('--dictionary_path', default='../Dictionary', type=str)
-    parser.add_argument('--rnn_sequence_size', default=20, type=int)
+    parser.add_argument('--rnn_sequence_size', default=30, type=int)
     parser.add_argument('--embedding_size', default=200, type=int)
-    parser.add_argument('--rnn_dim', default=128, type=int)
-    parser.add_argument('--rnn_layer', default=1, type=int)
-    parser.add_argument('--model_path', default='./save_model/100_seq2seq.pth', type=str)
+    parser.add_argument('--rnn_dim', default=200, type=int)
+    parser.add_argument('--rnn_layer', default=3, type=int)
+    parser.add_argument('--model_path', default='./save_model/30_seq2seq.pth', type=str)
     return parser.parse_args()
 
 
@@ -51,7 +51,6 @@ def load_voc(dictionary_path):
 def load_model(model_path, ko_voc, en_voc, embedding_size, seq_len, rnn_dim, rnn_layer):
     # load seq2seq model
     checkpoint = torch.load(model_path)
-
     ko_word_len = len(ko_voc.word2idx)
     en_word_len = len(en_voc.word2idx)
 
@@ -81,7 +80,7 @@ def translation():
                        args.rnn_dim, args.rnn_layer)
 
     # load test data & loader
-    test_data = TranslationDataset(test_x_path, test_y_path, ko_voc, en_voc, args.rnn_sequence_size)
+    test_data = RNNSeq2SeqDataset(test_x_path, test_y_path, ko_voc, en_voc, args.rnn_sequence_size)
     test_loader = DataLoader(test_data, batch_size=1)
 
     for enc_input, enc_length, dec_input, dec_output in test_loader:
@@ -89,20 +88,14 @@ def translation():
         enc_input = enc_input[sorted_idx]
         output = model(enc_input, enc_length, dec_input)
         accuracy = calculation_accuracy(output, dec_output)
-        print(accuracy)
 
         output = output.squeeze(0)
         value, indices = output.max(1)
         target_value = [ko_voc.idx2word[int(idx)] for idx in enc_input[0]]
         translation_values = [en_voc.idx2word[int(idx)] for idx in indices]
-        print(target_value)
-        print(translation_values)
-        break
+        print(' '.join([value for value in target_value if value not in ['__END__', '__UNK__', '__PAD__']]))
+        print(' '.join([value for value in translation_values if value not in ['__END__', '__UNK__', '__PAD__']]))
 
 
-def evaluation():
-    pass
-
-
-# translation()
+translation()
 
