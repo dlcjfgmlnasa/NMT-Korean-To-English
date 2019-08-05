@@ -36,17 +36,46 @@ pip install -r requirement.txt
 
 
 ### 1. Seq2Seq
-- 구현 완료 (2019.7.10)
-- 테스트 진행중
+- Parameter List
+
+```python
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--rnn_sequence_size', default=30, type=int)
+parser.add_argument('--min_count', default=3, type=int)
+parser.add_argument('--max_count', default=10000, type=int)
+parser.add_argument('--embedding_size', default=200, type=int)
+parser.add_argument('--rnn_dim', default=200, type=int)
+parser.add_argument('--rnn_layer', default=3, type=int)
+parser.add_argument('--batch_size', default=128, type=int)
+```
+
+- loss
+
+![Seq2Seq Loss function](./img/Seq2Seq_Loss_Graph.png)
+
+- translation
 
 
 ### 2. Seq2Seq with Attention
-- 구현 완료 (2019.7.15)
-- 테스트 진행중
-
+- Parameter List
+```python
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--rnn_sequence_size', default=30, type=int)
+parser.add_argument('--min_count', default=3, type=int)
+parser.add_argument('--max_count', default=100000, type=int)
+parser.add_argument('--embedding_size', default=200, type=int)
+parser.add_argument('--rnn_dim', default=123, type=int)
+parser.add_argument('--rnn_layer', default=3, type=int)
+parser.add_argument('--rnn_dropout_rate', default=0.5, type=float)
+parser.add_argument('--use_residual', default=True, type=bool)
+parser.add_argument('--attention_method', default='general', choices=['dot', 'general', 'concat'], type=str)
+parser.add_argument('--batch_size', default=128, type=int)
+```
 
 ### 3. Convolution Seq2Seq
-- 진행중... 
+- 구현 완료 (2019.08.05)
 
 
 ### 4. ByteNet
