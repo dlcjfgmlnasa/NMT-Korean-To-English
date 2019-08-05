@@ -4,55 +4,106 @@ import torch
 import torch.nn as nn
 
 
+def stack_rnn(embedding_size, rnn_dim, n_layers):
+    modules = nn.ModuleList()
+    for i in range(n_layers):
+        if i == 0:
+            rnn = nn.LSTM(embedding_size, rnn_dim, batch_first=True, bidirectional=True)
+        else:
+            rnn = nn.LSTM(rnn_dim, rnn_dim, batch_first=True, bidirectional=True)
+        modules.append(rnn)
+    return modules
+
+
 class EncoderRNN(nn.Module):
-    def __init__(self, embedding, seq_len, rnn_dim, n_layer, dropout_rate=0):
+    def __init__(self, embedding, seq_len, rnn_dim, n_layer, dropout_rate=0, use_residual=True):
         super().__init__()
         self.embedding = embedding
         self.seq_len = seq_len
         self.rnn_dim = rnn_dim
         self.n_layer = n_layer
+        self.use_residual = use_residual
 
-        embedding_dim = embedding.embedding_dim
-        self.batch_norm = nn.BatchNorm1d(seq_len)
-        self.rnn = nn.LSTM(embedding_dim, rnn_dim, n_layer, dropout=dropout_rate, batch_first=True, bidirectional=True)
+        self.embedding_dim = embedding.embedding_dim
+        self.dropout = nn.Dropout(p=dropout_rate)
+        self.rnn = stack_rnn(embedding.embedding_dim, rnn_dim, n_layer)
 
     def forward(self, inputs, length):
         embedded = self.embedding(inputs)
-        embedded = self.batch_norm(embedded)
-        packed = nn.utils.rnn.pack_padded_sequence(embedded, length, batch_first=True)
-        outputs, (hidden, cell) = self.rnn(packed)
-        outputs, outputs_length = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
-        # outputs => (batch_size, seq_len, rnn_dims)
-        del outputs_length
+        next_hidden, next_cell = [], []
+        x = embedded
+        outputs = None
 
-        # bidirectional rnn - output/hidden/cell concat
-        outputs = outputs[:, :, :self.rnn_dim] + outputs[:, :, self.rnn_dim:]
-        hidden = hidden[:1] + hidden[1:]
-        cell = cell[:1] + cell[1:]
+        for i, rnn in enumerate(self.rnn):
+            x = self.dropout(x)     # dropout
+            packed = nn.utils.rnn.pack_padded_sequence(x, length, batch_first=True)
+            outputs, (hidden, cell) = rnn(packed)
+            outputs, outputs_length = nn.utils.rnn.pad_packed_sequence(outputs, batch_first=True)
+            del outputs_length
 
+            # append hidden & cell
+            # hidden =>  (2, batch_size, rnn_dim) - 2 = because bidirectional
+            # cell   =>  (2, batch_size, rnn_dim) - 2 = because bidirectional
+            next_hidden.append(hidden)
+            next_cell.append(cell)
+
+            # concat output
+            dims = outputs.shape[2]
+            dims = int(dims / 2)
+            outputs = outputs[:, :, :dims] + outputs[:, :, dims:]
+
+            # residual connection
+            if self.use_residual and i != 0:
+                outputs = outputs + x
+            x = outputs
+
+        hidden = torch.stack(next_hidden)   # (n_layer, 2, batch_size, rnn_dim)
+        cell = torch.stack(next_cell)       # (n_layer, 2, batch_size, rnn_dim)
         return outputs, hidden, cell
 
 
 class DecoderAttentionRNN(nn.Module):
-    def __init__(self, attention, embedding, rnn_dim, out_dim, n_layer=1, dropout_rate=0):
+    def __init__(self, attention, embedding, rnn_dim, out_dim, n_layer=1, dropout_rate=0, use_residual=True):
         super().__init__()
         self.attention = attention
         self.embedding = embedding
         self.out_dim = out_dim
 
-        embedding_dim = embedding.embedding_dim
-        self.batch_norm = nn.BatchNorm1d(1)
-        self.rnn = nn.LSTM(embedding_dim, rnn_dim, n_layer, dropout=dropout_rate, batch_first=True)
+        self.embedding_dim = embedding.embedding_dim
+        self.rnn = stack_rnn(self.embedding_dim, rnn_dim, n_layer)
+        self.use_residual = use_residual
+        self.dropout = nn.Dropout(p=dropout_rate)
         self.linear = nn.Linear(rnn_dim * 2, out_dim)
+        self.test_rnn = nn.LSTM(self.embedding_dim, rnn_dim, batch_first=True, bidirectional=True)
 
     def forward(self, src_outputs, tar_input, last_hidden, last_cell):
         # src_outputs => (batch_size, seq_len, rnn_dim)
         # tar_input => (batch_size)
         embedded = self.embedding(tar_input)        # => (batch_size, embedding_size)
         embedded = embedded.unsqueeze(1)            # => (batch_size, 1, embedding_size)
-        embedded = self.batch_norm(embedded)        # => (batch_size, 1, embedding_size)
 
-        dec_output, (dec_hidden, dec_cell) = self.rnn(embedded, (last_hidden, last_cell))  # => (batch_size, 1, rnn_dim)
+        next_hidden, next_cell = [], []
+        dec_output = None
+        x = embedded
+        for i, rnn in enumerate(self.rnn):
+            x = self.dropout(x)
+            dec_output, (dec_hidden, dec_cell) = rnn(x, (last_hidden[i], last_cell[i]))
+            # append hidden & cell
+            next_hidden.append(dec_hidden)
+            next_cell.append(dec_cell)
+
+            # concat output
+            dims = dec_output.shape[2]
+            dims = int(dims / 2)
+            dec_output = dec_output[:, :, :dims] + dec_output[:, :, dims:]
+
+            # residual connection
+            if self.use_residual and i != 0:
+                dec_output = dec_output + x
+            x = dec_output
+
+        dec_hidden = torch.stack(next_hidden)   # (n_layer, 2, batch_size, rnn_dim)
+        dec_cell = torch.stack(next_cell)       # (n_layer, 2, batch_size, rnn_dim)
 
         # calc attention distribution
         attention_distribution = self.attention(src_outputs, dec_output)    # => (batch_size, seq_len, 1)

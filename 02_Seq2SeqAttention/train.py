@@ -5,9 +5,10 @@ import time
 import torch
 import argparse
 import torch.nn as nn
-import torch.optim as optim
+import torch.optim as opt
+import numpy as np
 from torch.utils.data import DataLoader
-from data_helper import TranslationDataset, create_or_get_voc, create_or_get_word2vec, apply_word2vec_embedding_matrix
+from data_helper import RNNSeq2SeqDataset, create_or_get_voc, create_or_get_word2vec, apply_word2vec_embedding_matrix
 from model import EncoderRNN, Attention, DecoderAttentionRNN, Seq2SeqAttention
 from tensorboardX import SummaryWriter
 
@@ -24,8 +25,10 @@ def get_args():
     parser.add_argument('--min_count', default=3, type=int)
     parser.add_argument('--max_count', default=100000, type=int)
     parser.add_argument('--embedding_size', default=200, type=int)
-    parser.add_argument('--rnn_dim', default=128, type=int)
-    parser.add_argument('--rnn_layer', default=1, type=int)
+    parser.add_argument('--rnn_dim', default=123, type=int)
+    parser.add_argument('--rnn_layer', default=3, type=int)
+    parser.add_argument('--rnn_dropout_rate', default=0.5, type=float)
+    parser.add_argument('--use_residual', default=True, type=bool)
     parser.add_argument('--attention_method', default='general', choices=['dot', 'general', 'concat'], type=str)
     parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--epochs', default=500, type=int)
@@ -68,6 +71,10 @@ def calculation_accuracy(out, tar):
     return accuracy
 
 
+def get_teacher_forcing_ratios(total_learning_step):
+    return np.linspace(0.0, 1.0, num=total_learning_step)[::-1]
+
+
 def train():
     args = get_args()
     x_train_path = os.path.join(args.data_path, 'train.ko')
@@ -103,16 +110,18 @@ def train():
     en_embedding = apply_word2vec_embedding_matrix(en_word2vec, en_embedding, en_voc)
 
     # define model
-    encoder = EncoderRNN(ko_embedding, args.rnn_sequence_size, args.rnn_dim, args.rnn_layer)
+    encoder = EncoderRNN(
+        ko_embedding, args.rnn_sequence_size, args.rnn_dim, args.rnn_layer, args.rnn_dropout_rate, args.use_residual)
     attention = Attention(args.attention_method, args.rnn_dim)
-    decoder = DecoderAttentionRNN(attention, en_embedding, args.rnn_dim, en_word_len, args.rnn_layer)
+    decoder = DecoderAttentionRNN(attention, en_embedding, args.rnn_dim, en_word_len, args.rnn_layer,
+                                  args.rnn_dropout_rate, args.use_residual)
     model = Seq2SeqAttention(encoder, decoder)
     model.to(device)
     model.train()
 
     print(f'The model has {count_parameters(model):,} trainable parameters')
 
-    optimizer = optim.Adam(model.parameters(), lr=0.01)
+    optimizer = opt.Adam(model.parameters(), lr=0.01)
     criterion = nn.CrossEntropyLoss(ignore_index=en_voc.word2idx[en_voc.PAD])
 
     # if exist model => load model
@@ -123,12 +132,16 @@ def train():
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     # load train data & loader
-    train_data = TranslationDataset(x_train_path, y_train_path, ko_voc, en_voc, args.rnn_sequence_size)
+    train_data = RNNSeq2SeqDataset(x_train_path, y_train_path, ko_voc, en_voc, args.rnn_sequence_size)
     train_loader = DataLoader(train_data, shuffle=True, batch_size=args.batch_size)
 
     # load dev data & loader
-    dev_data = TranslationDataset(x_dev_path, y_dev_path, ko_voc, en_voc, args.rnn_sequence_size)
+    dev_data = RNNSeq2SeqDataset(x_dev_path, y_dev_path, ko_voc, en_voc, args.rnn_sequence_size)
     dev_loader = DataLoader(dev_data, batch_size=int(dev_data.__len__() / 50))
+
+    # scheduled sampling (with linear function)
+    total_learning_step = args.epochs * len(iter(train_loader))
+    teacher_forcing_ratio_list = get_teacher_forcing_ratios(total_learning_step)
 
     # Training
     start_time = time.time()
@@ -141,20 +154,20 @@ def train():
             # train_enc_length => (batch_size)
             # train_dec_input  => (batch_size, sequence_size)
             # train_dec_output => (batch_size, sequence_size)
-            try:
-                train_enc_input, train_enc_length, train_dec_input, train_dec_output = data
-                train_enc_length, sorted_idx = train_enc_length.sort(0, descending=True)
-                train_enc_input = train_enc_input[sorted_idx]
+            train_enc_input, train_enc_length, train_dec_input, train_dec_output = data
+            train_enc_length, sorted_idx = train_enc_length.sort(0, descending=True)
+            train_enc_input = train_enc_input[sorted_idx]
 
+            try:
                 # nn forward
-                output, _ = model(train_enc_input, train_enc_length, train_dec_input)
+                output, _ = model(train_enc_input, train_enc_length, train_dec_input,
+                                  teacher_forcing_ratio_list[global_step])
             except RuntimeError:
                 continue
 
             # get loss & accuracy
             loss = calculation_loss(output, train_dec_output, criterion)
             accuracy = calculation_accuracy(output, train_dec_input)
-
             writer.add_scalar('loss', loss.item(), global_step)
             writer.add_scalar('accuracy', accuracy.item(), global_step)
 
