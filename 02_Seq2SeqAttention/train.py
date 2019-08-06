@@ -25,7 +25,7 @@ def get_args():
     parser.add_argument('--min_count', default=3, type=int)
     parser.add_argument('--max_count', default=100000, type=int)
     parser.add_argument('--embedding_size', default=200, type=int)
-    parser.add_argument('--rnn_dim', default=100, type=int)
+    parser.add_argument('--rnn_dim', default=200, type=int)
     parser.add_argument('--enc_layers', default=3, type=int)
     parser.add_argument('--dec_layers', default=3, type=int)
     parser.add_argument('--rnn_dropout_rate', default=0.5, type=float)
