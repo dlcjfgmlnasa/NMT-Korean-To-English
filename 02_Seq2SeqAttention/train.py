@@ -25,13 +25,15 @@ def get_args():
     parser.add_argument('--min_count', default=3, type=int)
     parser.add_argument('--max_count', default=100000, type=int)
     parser.add_argument('--embedding_size', default=200, type=int)
-    parser.add_argument('--rnn_dim', default=123, type=int)
-    parser.add_argument('--rnn_layer', default=3, type=int)
+    parser.add_argument('--rnn_dim', default=100, type=int)
+    parser.add_argument('--enc_layers', default=3, type=int)
+    parser.add_argument('--dec_layers', default=3, type=int)
     parser.add_argument('--rnn_dropout_rate', default=0.5, type=float)
     parser.add_argument('--use_residual', default=True, type=bool)
     parser.add_argument('--attention_method', default='general', choices=['dot', 'general', 'concat'], type=str)
     parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--epochs', default=500, type=int)
+    parser.add_argument('--learning_rate', default=0.01, type=float)
     parser.add_argument('--model_path', default='./save_model/0_seq2seq.pth', type=str)
     args = parser.parse_args()
     return args
@@ -39,7 +41,7 @@ def get_args():
 
 def init_weights(m):
     for name, param in m.named_parameters():
-        nn.init.uniform_(param.data, -0.08, 0.08)
+        nn.init.uniform_(param.data, -0.04, 0.04)
 
 
 def count_parameters(model):
@@ -111,17 +113,18 @@ def train():
 
     # define model
     encoder = EncoderRNN(
-        ko_embedding, args.rnn_sequence_size, args.rnn_dim, args.rnn_layer, args.rnn_dropout_rate, args.use_residual)
+        ko_embedding, args.rnn_sequence_size, args.rnn_dim, args.enc_layers, args.rnn_dropout_rate, args.use_residual)
     attention = Attention(args.attention_method, args.rnn_dim)
-    decoder = DecoderAttentionRNN(attention, en_embedding, args.rnn_dim, en_word_len, args.rnn_layer,
+    decoder = DecoderAttentionRNN(attention, en_embedding, args.rnn_dim, en_word_len, args.dec_layers,
                                   args.rnn_dropout_rate, args.use_residual)
     model = Seq2SeqAttention(encoder, decoder)
+    model.apply(init_weights)
     model.to(device)
     model.train()
 
     print(f'The model has {count_parameters(model):,} trainable parameters')
 
-    optimizer = opt.Adam(model.parameters(), lr=0.01)
+    optimizer = opt.Adam(model.parameters(), lr=args.learning_rate)
     criterion = nn.CrossEntropyLoss(ignore_index=en_voc.word2idx[en_voc.PAD])
 
     # if exist model => load model
@@ -157,7 +160,7 @@ def train():
             train_enc_input, train_enc_length, train_dec_input, train_dec_output = data
             train_enc_length, sorted_idx = train_enc_length.sort(0, descending=True)
             train_enc_input = train_enc_input[sorted_idx]
-
+            encoder(train_enc_input, train_enc_length)
             try:
                 # nn forward
                 output, _ = model(train_enc_input, train_enc_length, train_dec_input,
