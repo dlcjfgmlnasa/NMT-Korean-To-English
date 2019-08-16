@@ -5,6 +5,7 @@ from __future__ import division
 import os
 import re
 import time
+import shutil
 import torch
 import pickle
 from abc import *
@@ -12,7 +13,7 @@ from konlpy.tag import Okt
 from torch.utils.data import Dataset
 from gensim.models import KeyedVectors
 from gensim.models import Word2Vec
-
+import sentencepiece as spm
 
 okt = Okt()
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -142,6 +143,30 @@ def create_or_get_voc(ko_data_path=None, en_data_path=None, min_count=0, max_cou
         return ko_voc, en_voc
 
 
+def create_or_get_voc_v2(save_path, ko_corpus_path=None, en_corpus_path=None, ko_vocab_size=8000, en_vocab_size=8000):
+    ko_corpus_prefix = 'ko_corpus'
+    en_corpus_prefix = 'en_corpus'
+
+    if ko_corpus_path and en_corpus_path:
+        templates = '--input={} --model_prefix={} --vocab_size={} ' \
+                    '--bos_id=0 --eos_id=1 --unk_id=2 --pad_id=3'
+        ko_model_train_cmd = templates.format(ko_corpus_path, ko_corpus_prefix, ko_vocab_size)
+        en_model_train_cmd = templates.format(en_corpus_path, en_corpus_prefix, en_vocab_size)
+
+        spm.SentencePieceTrainer.Train(ko_model_train_cmd)
+        spm.SentencePieceTrainer.Train(en_model_train_cmd)
+
+        shutil.move(ko_corpus_prefix + '.model', save_path)
+        shutil.move(ko_corpus_prefix + '.vocab', save_path)
+        shutil.move(en_corpus_prefix + '.model', save_path)
+        shutil.move(en_corpus_prefix + '.vocab', save_path)
+    ko_sp = spm.SentencePieceProcessor()
+    en_sp = spm.SentencePieceProcessor()
+    ko_sp.load(os.path.join(save_path, ko_corpus_prefix+'.model'))
+    en_sp.load(os.path.join(save_path, en_corpus_prefix+'.model'))
+    return ko_sp, en_sp
+
+
 def create_or_get_word2vec(save_path, ko_data_path=None, en_data_path=None,
                            embedding_size=200, window_size=5,
                            min_count=0, max_count=8000):
@@ -203,16 +228,6 @@ class TranslationDataset(Dataset, metaclass=ABCMeta):
     @abstractmethod
     def decoder_output_to_vector(self, sentence: str): pass
 
-    @staticmethod
-    def word2idx(words, voc):
-        idx_list = []
-        for word in words:
-            try:
-                idx_list.append(voc.word2idx[word])
-            except KeyError:
-                idx_list.append(voc.word2idx[voc.UNK])
-        return idx_list
-
 
 class RNNSeq2SeqDataset(TranslationDataset):
     # for Seq2Seq model & Seq2Seq attention model
@@ -257,6 +272,16 @@ class RNNSeq2SeqDataset(TranslationDataset):
             words = words[:self.sequence_size]
             length = len(words)
         return words, length
+
+    @staticmethod
+    def word2idx(words, voc):
+        idx_list = []
+        for word in words:
+            try:
+                idx_list.append(voc.word2idx[word])
+            except KeyError:
+                idx_list.append(voc.word2idx[voc.UNK])
+        return idx_list
 
 
 class ConvSeq2SeqDataset(TranslationDataset):
@@ -303,3 +328,57 @@ class ConvSeq2SeqDataset(TranslationDataset):
             words = words[:self.sequence_size]
         idx_list = self.word2idx(words, self.en_voc)
         return torch.tensor(idx_list).to(device)
+
+    @staticmethod
+    def word2idx(words, voc):
+        idx_list = []
+        for word in words:
+            try:
+                idx_list.append(voc.word2idx[word])
+            except KeyError:
+                idx_list.append(voc.word2idx[voc.UNK])
+        return idx_list
+
+
+class RNNSeq2SeqDatasetV2(TranslationDataset):
+    # for Seq2Seq model & Seq2Seq attention model
+    # using google sentencepiece (https://github.com/google/sentencepiece.git)
+    def __init__(self, x_path, y_path, ko_voc, en_voc, sequence_size):
+        super().__init__(x_path, y_path, ko_voc, en_voc, sequence_size)
+        self.KO_PAD_ID = ko_voc['<pad>']
+        self.EN_PAD_ID = en_voc['<pad>']
+        self.EN_BOS_ID = en_voc['<s>']
+        self.EN_EOS_ID = en_voc['</s>']
+
+    def __getitem__(self, idx):
+        encoder_input = self.encoder_input_to_vector(self.x[idx])
+        decoder_input = self.decoder_input_to_vector(self.y[idx])
+        decoder_output = self.decoder_output_to_vector(self.y[idx])
+        return encoder_input, decoder_input, decoder_output
+
+    def encoder_input_to_vector(self, sentence: str):
+        idx_list = self.ko_voc.EncodeAsIds(sentence)
+        idx_list = self.padding(idx_list, self.KO_PAD_ID)
+        return torch.tensor(idx_list).to(device)
+
+    def decoder_input_to_vector(self, sentence: str):
+        idx_list = self.en_voc.EncodeAsIds(sentence)
+        idx_list.insert(0, self.EN_BOS_ID)
+        idx_list = self.padding(idx_list, self.EN_PAD_ID)
+
+        return torch.tensor(idx_list).to(device)
+
+    def decoder_output_to_vector(self, sentence: str):
+        idx_list = self.en_voc.EncodeAsIds(sentence)
+        idx_list.append(self.EN_EOS_ID)
+        idx_list = self.padding(idx_list, self.EN_PAD_ID)
+
+        return torch.tensor(idx_list).to(device)
+
+    def padding(self, idx_list, padding_id):
+        length = len(idx_list)
+        if length < self.sequence_size:
+            idx_list = idx_list + [padding_id for _ in range(self.sequence_size - len(idx_list))]
+        else:
+            idx_list = idx_list[:self.sequence_size]
+        return idx_list
