@@ -1,5 +1,6 @@
 # -*- coding:utf-8 -*-
 import os
+import sys; sys.path.append('..')
 import random
 import torch
 import torch.nn as nn
@@ -45,7 +46,8 @@ class Trainer(object):
 
         optimizer = opt.Adam(model.parameters(), lr=self.args.learning_rate)
 
-        total_step = self.args.epochs * (len(self.train_loader) + 1)
+        epoch_step = len(self.train_loader) + 1
+        total_step = self.args.epochs * epoch_step
         teacher_forcing_ratios = self.cal_teacher_forcing_ratio(total_step)
 
         step = 0
@@ -69,19 +71,20 @@ class Trainer(object):
                         self.writer.add_scalar('train/loss', loss.item(), step)
                         self.writer.add_scalar('train/accuracy', accuracy.item(), step)
 
-                        print('[Train] epoch : {0:2d}  iter: {1:4d}/{2:4d}  step : {3:4d}  '
-                              '=>  loss : {4:12f}  accuracy : {5:10f}'
-                              .format(epoch, i, total_step, step, loss.item(), accuracy.item()))
+                        print('[Train] epoch : {0:2d}  iter: {1:4d}/{2:4d}  step : {3:6d}/{4:6d}  '
+                              '=>  loss : {5:10f}  accuracy : {6:12f}'
+                              .format(epoch, i, epoch_step, step, total_step, loss.item(), accuracy.item()))
 
                     # Validation Log
                     if step % self.args.val_step_print == 0:
-                        val_loss, val_accuracy = self.val(model, teacher_forcing_ratio=teacher_forcing_ratios[i])
-                        self.writer.add_scalar('val/loss', val_loss, step)
-                        self.writer.add_scalar('val/accuracy', val_accuracy, step)
+                        with torch.no_grad():
+                            val_loss, val_accuracy = self.val(model, teacher_forcing_ratio=teacher_forcing_ratios[i])
+                            self.writer.add_scalar('val/loss', val_loss, step)
+                            self.writer.add_scalar('val/accuracy', val_accuracy, step)
 
-                        print('[ Val ] epoch : {0:2d}  iter: {1:4d}/{2:4d}  step : {3:4d}  '
-                              '=>  loss : {4:12f}  accuracy : {5:10f}'
-                              .format(epoch, i, total_step, step, val_loss, val_accuracy))
+                            print('[ Val ] epoch : {0:2d}  iter: {1:4d}/{2:4d}  step : {3:6d}/{4:6d}  '
+                                  '=>  loss : {5:10f}  accuracy : {6:12f}'
+                                  .format(epoch, i, epoch_step, step, total_step, val_loss, val_accuracy))
 
                     # Save Model Point
                     if step % self.args.step_save == 0:
@@ -136,6 +139,7 @@ class Trainer(object):
         torch.save({
             'epoch': epoch,
             'steps': step,
+            'seq_len': self.args.sequence_size,
             'encoder_parameter': self.encoder_parameter(),
             'decoder_parameter': self.decoder_parameter(),
             'model_state_dict': model.state_dict(),
@@ -143,7 +147,7 @@ class Trainer(object):
         }, model_path)
 
     def cal_teacher_forcing_ratio(self, total_step):
-        if self.args.learning_method == 'Teacher_forcing':
+        if self.args.learning_method == 'Teacher_Forcing':
             teacher_forcing_ratios = [1.0 for _ in range(total_step)]
         elif self.args.learning_method == 'Scheduled_Sampling':
             import numpy as np
@@ -153,7 +157,14 @@ class Trainer(object):
         return teacher_forcing_ratios
 
     def get_voc(self):
-        ko_voc, en_voc = create_or_get_voc_v2(save_path=self.args.dictionary_path)
+        try:
+            ko_voc, en_voc = create_or_get_voc_v2(save_path=self.args.dictionary_path)
+        except OSError:
+            src_train_path = os.path.join(self.args.data_path, self.args.src_train_filename)
+            trg_train_path = os.path.join(self.args.data_path, self.args.trg_train_filename)
+            ko_voc, en_voc = create_or_get_voc_v2(save_path=self.args.dictionary_path,
+                                                  ko_corpus_path=src_train_path,
+                                                  en_corpus_path=trg_train_path)
         return ko_voc, en_voc
 
     def get_train_loader(self):
@@ -214,7 +225,7 @@ class Trainer(object):
 
     def encoder_parameter(self):
         param = {
-            'embedding_size': 8000,
+            'embedding_size': 4000,
             'embedding_dim': self.args.embedding_dim,
             'pad_id': self.ko_voc['<pad>'],
             'embedding_dropout': self.args.encoder_embedding_dropout,
@@ -235,7 +246,7 @@ class Trainer(object):
 
     def decoder_parameter(self):
         param = {
-            'embedding_size': 8000,
+            'embedding_size': 4000,
             'embedding_dim': self.args.embedding_dim,
             'pad_id': self.en_voc['<pad>'],
             'embedding_dropout': self.args.decoder_embedding_dropout,
@@ -258,18 +269,57 @@ class Translation(object):
                  ):
         self.checkpoint = torch.load(checkpoint)
         self.seq_len = self.checkpoint['seq_len']
+        self.batch_size = 100
         self.get_attention = get_attention
+
         self.ko_voc, self.en_voc = create_or_get_voc_v2(save_path=dictionary_path)
         self.model = self.model_load()
 
-    def translation(self, sentence):
+    def transform(self, sentence: str) -> (str, torch.Tensor):
         src_input = self.src_input(sentence)
         trg_input = self.trg_input()
-        output = self.model(src_input, trg_input, teacher_forcing_rate=0.0)
+
+        attention = None
+        if self.get_attention:
+            output, attention = self.model(src_input, trg_input, teacher_forcing_rate=0.0)
+        else:
+            output = self.model(src_input, trg_input, teacher_forcing_rate=0.0)
         _, indices = output.max(dim=2)
-        translation_sentence = ''.join([self.en_voc.IdToPiece(idx.item()) for idx in indices[0]]).replace('▁', ' ')
-        translation_sentence = translation_sentence.strip()
-        return translation_sentence
+        result = self.tensor2sentence(indices)[0]
+
+        return result, attention
+
+    def batch_transform(self, sentence_list: list) -> (list, torch.Tensor):
+        if len(sentence_list) > self.batch_size:
+            raise ValueError('You must sentence size less than {}'.format(self.batch_size))
+
+        src_inputs = torch.stack([self.src_input(sentence) for sentence in sentence_list]).squeeze(dim=1)
+        trg_inputs = torch.stack([self.trg_input() for _ in sentence_list]).squeeze(dim=1)
+
+        attention = None
+        if self.get_attention:
+            output, attention = self.model(src_inputs, trg_inputs, teacher_forcing_rate=0.0)
+        else:
+            output = self.model(src_inputs, trg_inputs, teacher_forcing_rate=0.0)
+
+        _, indices = output.max(dim=2)
+        result = self.tensor2sentence(indices)
+        return result, attention
+
+    def tensor2sentence(self, indices: torch.Tensor) -> list:
+        result = []
+
+        for idx_list in indices:
+            translation_sentence = []
+            for idx in idx_list:
+                word = self.en_voc.IdToPiece(idx.item())
+                if word == '</s>':
+                    break
+                translation_sentence.append(word)
+            translation_sentence = ''.join(translation_sentence).replace('▁', ' ').strip()
+            result.append(translation_sentence)
+
+        return result
 
     def src_input(self, sentence):
         idx_list = self.ko_voc.EncodeAsIds(sentence)
